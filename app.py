@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +9,8 @@ import requests
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, Response
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 app = FastAPI(title="World Bank Data Downloader")
 
@@ -17,8 +18,29 @@ WORLD_BANK_BASE_URL = "https://api.worldbank.org/v2/country/{country}/indicator/
 WORLD_BANK_QUERY_PARAMS = {"format": "json", "per_page": 100}
 PUBLIC_INDEX_FILE = Path(__file__).resolve().parent / "public" / "index.html"
 WORLD_BANK_REQUEST_HEADERS = {"User-Agent": "WorldBankDataDownloader/1.0"}
-WORLD_BANK_TIMEOUT = (5, 8)
-WORLD_BANK_MAX_ATTEMPTS = 2
+WORLD_BANK_TIMEOUT = (5, 10)
+WORLD_BANK_RETRY_CONFIG = Retry(
+    total=2,
+    connect=2,
+    read=2,
+    status=2,
+    backoff_factor=0.3,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET"],
+    raise_on_status=False,
+)
+
+
+def build_world_bank_session() -> requests.Session:
+    """Create a shared session with retry-aware transport adapters."""
+    session = requests.Session()
+    adapter = HTTPAdapter(max_retries=WORLD_BANK_RETRY_CONFIG)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+WORLD_BANK_SESSION = build_world_bank_session()
 
 # Only the indicator codes from the specification are accepted.
 ALLOWED_INDICATORS = {
@@ -73,35 +95,25 @@ def fetch_world_bank_data(country: str, indicator: str) -> list[dict[str, Any]]:
     """Request the World Bank API and verify the top-level payload shape."""
     url = WORLD_BANK_BASE_URL.format(country=country, indicator=indicator)
 
-    last_error: Exception | None = None
-    payload: Any = None
-
-    # Retry briefly because the upstream API occasionally returns transient slow responses.
-    for attempt in range(WORLD_BANK_MAX_ATTEMPTS):
-        try:
-            response = requests.get(
-                url,
-                params=WORLD_BANK_QUERY_PARAMS,
-                headers=WORLD_BANK_REQUEST_HEADERS,
-                timeout=WORLD_BANK_TIMEOUT,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            break
-        except requests.RequestException as exc:
-            last_error = exc
-            if attempt < WORLD_BANK_MAX_ATTEMPTS - 1:
-                time.sleep(1)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail="Invalid response from the World Bank API",
-            ) from exc
-    else:
+    try:
+        response = WORLD_BANK_SESSION.get(
+            url,
+            params=WORLD_BANK_QUERY_PARAMS,
+            headers=WORLD_BANK_REQUEST_HEADERS,
+            timeout=WORLD_BANK_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload: Any = response.json()
+    except requests.RequestException as exc:
         raise HTTPException(
             status_code=500,
             detail="Failed to fetch data from the World Bank API",
-        ) from last_error
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Invalid response from the World Bank API",
+        ) from exc
 
     # The API contract requires a JSON array with metadata first and data second.
     if (
