@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,7 @@ import pandas as pd
 import requests
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 
 app = FastAPI(title="World Bank Data Downloader")
 
@@ -44,8 +45,10 @@ app.add_middleware(
 
 
 @app.get("/", include_in_schema=False)
-def serve_frontend() -> FileResponse:
-    """Serve the web application when running locally with Uvicorn."""
+def serve_frontend() -> Response:
+    """Serve the frontend locally and redirect to the static asset on Vercel."""
+    if os.getenv("VERCEL"):
+        return RedirectResponse(url="/index.html", status_code=307)
     return FileResponse(PUBLIC_INDEX_FILE)
 
 
