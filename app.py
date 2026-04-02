@@ -16,6 +16,9 @@ app = FastAPI(title="World Bank Data Downloader")
 WORLD_BANK_BASE_URL = "https://api.worldbank.org/v2/country/{country}/indicator/{indicator}"
 WORLD_BANK_QUERY_PARAMS = {"format": "json", "per_page": 100}
 PUBLIC_INDEX_FILE = Path(__file__).resolve().parent / "public" / "index.html"
+WORLD_BANK_REQUEST_HEADERS = {"User-Agent": "WorldBankDataDownloader/1.0"}
+WORLD_BANK_TIMEOUT = (5, 8)
+WORLD_BANK_MAX_ATTEMPTS = 2
 
 # Only the indicator codes from the specification are accepted.
 ALLOWED_INDICATORS = {
@@ -73,17 +76,22 @@ def fetch_world_bank_data(country: str, indicator: str) -> list[dict[str, Any]]:
     last_error: Exception | None = None
     payload: Any = None
 
-    # Retry a few times because the upstream API occasionally returns transient 5xx errors.
-    for attempt in range(3):
+    # Retry briefly because the upstream API occasionally returns transient slow responses.
+    for attempt in range(WORLD_BANK_MAX_ATTEMPTS):
         try:
-            response = requests.get(url, params=WORLD_BANK_QUERY_PARAMS, timeout=30)
+            response = requests.get(
+                url,
+                params=WORLD_BANK_QUERY_PARAMS,
+                headers=WORLD_BANK_REQUEST_HEADERS,
+                timeout=WORLD_BANK_TIMEOUT,
+            )
             response.raise_for_status()
             payload = response.json()
             break
         except requests.RequestException as exc:
             last_error = exc
-            if attempt < 2:
-                time.sleep(attempt + 1)
+            if attempt < WORLD_BANK_MAX_ATTEMPTS - 1:
+                time.sleep(1)
         except ValueError as exc:
             raise HTTPException(
                 status_code=500,

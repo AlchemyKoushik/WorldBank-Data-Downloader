@@ -717,6 +717,7 @@
       const statusElement = document.getElementById("status");
       const downloadButton = document.getElementById("download-button");
       const downloadButtonLabel = document.getElementById("download-button-label");
+      const DOWNLOAD_TIMEOUT_MS = 20000;
 
       let selectedIndicator = null;
 
@@ -854,9 +855,16 @@
         downloadButtonLabel.textContent = "Preparing CSV...";
         setStatus(`Preparing ${selectedIndicator.label} data for download...`, "info");
 
+        let timeoutId = null;
+
         try {
+          const controller = new AbortController();
+          timeoutId = window.setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+
           // Call the backend download route and let the browser save the returned CSV blob.
-          const response = await fetch(`${getApiBaseUrl()}/download?${query.toString()}`);
+          const response = await fetch(`${getApiBaseUrl()}/download?${query.toString()}`, {
+            signal: controller.signal,
+          });
 
           if (!response.ok) {
             let errorMessage = "Unable to download the requested data.";
@@ -885,8 +893,19 @@
 
           setStatus(`${selectedIndicator.label} downloaded successfully.`, "success");
         } catch (error) {
+          if (error.name === "AbortError") {
+            setStatus(
+              "The World Bank API is taking too long to respond. Please try again in a moment.",
+              "error"
+            );
+            return;
+          }
+
           setStatus(error.message || "Unable to download the requested data.", "error");
         } finally {
+          if (timeoutId !== null) {
+            window.clearTimeout(timeoutId);
+          }
           setBusyState(false);
           downloadButtonLabel.textContent = selectedIndicator
             ? `Download ${selectedIndicator.label} CSV`
